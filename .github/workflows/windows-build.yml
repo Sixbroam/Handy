@@ -1,0 +1,21 @@
+name: "Windows Build"
+
+# Builds the Windows x86_64 installer (NSIS .exe) from this branch and uploads
+# it as a workflow artifact. Manual dispatch only — use it to produce a Windows
+# build of the remote-transcription-server feature for the client machine.
+# Produces an UNSIGNED binary (no code-signing cert on this fork): Windows
+# SmartScreen will show a warning on first run, click "More info → Run anyway".
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: windows-latest
+      target: x86_64-pc-windows-msvc
+      build-args: ""
+      sign-binaries: false
+      upload-artifacts: true
+    secrets: inherit
