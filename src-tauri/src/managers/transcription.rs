@@ -1,9 +1,10 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
+use crate::server::RemoteClient;
 use crate::settings::{
     get_settings, AppSettings, ModelUnloadTimeout, OrtAcceleratorSetting,
-    TranscribeAcceleratorSetting,
+    TranscribeAcceleratorSetting, TranscriptionBackend,
 };
 use anyhow::Result;
 use log::{debug, error, info, warn};
@@ -249,6 +250,11 @@ pub struct TranscriptionManager {
     /// `is_model_loaded()` consults this so the model still reports "loaded"
     /// while the worker holds it.
     active_engine_lease: Arc<AtomicU64>,
+    /// Cached HTTP client for `TranscriptionBackend::Remote`. Lazily built and
+    /// rebuilt automatically when the server URL/token settings change. Held in
+    /// its own mutex (not the engine mutex) so the remote path never contends
+    /// with local model load/unload.
+    remote_client: Arc<Mutex<Option<RemoteClient>>>,
 }
 
 impl TranscriptionManager {
@@ -269,6 +275,7 @@ impl TranscriptionManager {
             next_stream_worker_id: Arc::new(AtomicU64::new(1)),
             active_stream_worker: Arc::new(AtomicU64::new(0)),
             active_engine_lease: Arc::new(AtomicU64::new(0)),
+            remote_client: Arc::new(Mutex::new(None)),
         };
 
         // Start the idle watcher
@@ -1091,6 +1098,48 @@ impl TranscriptionManager {
         .emit(&self.app_handle);
     }
 
+    /// Delegate inference to a remote Handy `--serve` instance. Builds (or
+    /// rebuilds) the cached [`RemoteClient`] from the current settings, then
+    /// POSTs the 16 kHz mono f32 buffer and returns the server's transcribed
+    /// text. Errors (server unreachable, auth failure, server-side inference
+    /// error) propagate to the caller exactly like a local model failure.
+    fn transcribe_remote(&self, audio: Vec<f32>, settings: &AppSettings) -> Result<String> {
+        let url = settings
+            .remote_server_url
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Remote transcription backend is selected but no server URL is configured."
+                )
+            })?;
+        // Rebuild the client if the URL or token changed (or if this is the
+        // first call). A dedicated tokio runtime lives inside the client, so we
+        // avoid recreating it on every dictation.
+        {
+            let mut guard = self.remote_client.lock().unwrap();
+            let needs_rebuild = guard
+                .as_ref()
+                .is_none_or(|c| c.url != url || c.token != settings.remote_server_token);
+            if needs_rebuild {
+                info!("Building remote transcription client for {}", url);
+                *guard = Some(RemoteClient::new(
+                    url.to_string(),
+                    settings.remote_server_token.clone(),
+                ));
+            }
+        }
+        let guard = self.remote_client.lock().unwrap();
+        let client = guard.as_ref().expect("remote client was just initialized");
+        client.transcribe(&audio, &settings.selected_language)
+    }
+
+    /// Drop the cached remote client (e.g. when switching the backend away from
+    /// Remote, which frees the dedicated tokio runtime it owns).
+    pub fn invalidate_remote_client(&self) {
+        *self.remote_client.lock().unwrap() = None;
+    }
+
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
@@ -1111,6 +1160,16 @@ impl TranscriptionManager {
             debug!("Empty audio vector");
             self.maybe_unload_immediately("empty audio");
             return Ok(String::new());
+        }
+
+        // Remote backend short-circuit: when configured to delegate inference to
+        // a remote Handy `--serve` instance, POST the audio and return its text
+        // directly, bypassing the entire local model path (load, streaming,
+        // capability probing, idle watcher). The remote client is cached and
+        // rebuilt lazily when the URL/token settings change.
+        let settings = get_settings(&self.app_handle);
+        if settings.transcription_backend == TranscriptionBackend::Remote {
+            return self.transcribe_remote(audio, &settings);
         }
 
         // Check if model is loaded, if not try to load it

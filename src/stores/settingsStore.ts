@@ -6,6 +6,7 @@ import type {
   AudioDevice,
   TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
+  TranscriptionBackend,
 } from "@/bindings";
 import { commands } from "@/bindings";
 
@@ -161,6 +162,14 @@ const settingUpdaters: {
     commands.changeTranscribeGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  transcription_backend: (value) =>
+    commands.changeTranscriptionBackendSetting(value as TranscriptionBackend),
+  remote_server_url: (value) =>
+    commands.changeRemoteServerUrlSetting((value as string | null) ?? null),
+  remote_server_token: (value) =>
+    commands.changeRemoteServerTokenSetting((value as string | null) ?? null),
+  remote_server_listen_addr: (value) =>
+    commands.changeRemoteServerListenAddrSetting(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(

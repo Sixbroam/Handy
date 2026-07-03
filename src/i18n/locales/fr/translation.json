@@ -15,7 +15,8 @@
     "postProcessing": "Post-traitement",
     "history": "Historique",
     "debug": "Débogage",
-    "about": "À propos"
+    "about": "À propos",
+    "transcriptionServer": "Serveur de transcription"
   },
   "onboarding": {
     "subtitle": "Pour commencer, choisissez un modèle de transcription",
@@ -563,6 +564,40 @@
       "whatsNewUpdates": {
         "label": "Afficher les nouveautés",
         "description": "Afficher les notes de version après les mises à jour de Handy"
+      }
+    },
+    "transcriptionServer": {
+      "title": "Serveur de transcription",
+      "backend": {
+        "label": "Moteur d'inférence",
+        "description": "Où la reconnaissance vocale s'exécute : localement avec un modèle chargé, ou sur un serveur Handy distant (--serve) via le réseau.",
+        "local": "Local (cet appareil)",
+        "remote": "Serveur distant"
+      },
+      "serverUrl": {
+        "label": "URL du serveur",
+        "description": "URL de base du serveur Handy distant, ex. http://100.101.102.103:8080 (IP Tailscale) ou http://mini-pc:8080.",
+        "placeholder": "http://hote:8080"
+      },
+      "token": {
+        "label": "Jeton d'authentification",
+        "description": "Secret partagé (Bearer) configuré sur le serveur. Facultatif mais recommandé même sur un tailnet de confiance.",
+        "placeholder": "laisser vide si le serveur n'a pas de jeton"
+      },
+      "test": {
+        "button": "Tester la connexion",
+        "testing": "Test en cours…",
+        "description": "Interroge le endpoint /health du serveur pour vérifier la connectivité et l'authentification.",
+        "success": "Connecté. Modèle : {{model}} (chargé : {{loaded}})"
+      },
+      "remoteNotice": "En mode Serveur distant, aucun modèle local n'est utilisé — cet appareil capture l'audio et le serveur effectue la transcription. Configurez le modèle et la langue du serveur sur le serveur lui-même (--serve / HANDY_MODEL / HANDY_LANGUAGE).",
+      "serverMode": {
+        "title": "Exécuter comme serveur (--serve)",
+        "listenAddr": {
+          "label": "Adresse d'écoute",
+          "description": "Adresse à laquelle le serveur HTTP --serve se lie. Par défaut 127.0.0.1:8080 (boucle locale uniquement) ; utilisez 0.0.0.0:8080 ou une IP d'interface spécifique pour l'exposer via LAN/Tailscale."
+        },
+        "setupHint": "S'applique uniquement lorsque cette machine exécute Handy avec --serve. Démarrez le serveur en ligne de commande, ex. handy --serve --serve-host 0.0.0.0. Consultez les notes de déploiement pour l'unité systemd."
       }
     }
   },

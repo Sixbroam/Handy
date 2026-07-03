@@ -291,6 +291,18 @@ pub enum OrtAcceleratorSetting {
     Rocm,
 }
 
+/// Where speech-to-text inference runs. `Local` loads a model on this machine
+/// (the historical, offline behaviour). `Remote` delegates inference to another
+/// Handy instance running in `--serve` mode on the network (e.g. a low-power
+/// laptop offloading to a GPU mini-PC over Tailscale/LAN).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionBackend {
+    #[default]
+    Local,
+    Remote,
+}
+
 #[derive(Clone, Serialize, Deserialize, Type)]
 #[serde(transparent)]
 pub(crate) struct SecretMap(HashMap<String, String>);
@@ -438,6 +450,29 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    /// Where inference runs: locally (a loaded model) or on a remote Handy
+    /// `--serve` instance. When `Remote`, `remote_server_url` must be set and
+    /// no local model is required on this machine.
+    #[serde(default)]
+    pub transcription_backend: TranscriptionBackend,
+    /// Base URL of the remote transcription server, e.g.
+    /// `http://100.101.102.103:8080` (a Tailscale IP) or `http://gpu-box:8080`.
+    /// Used only when `transcription_backend == Remote`.
+    #[serde(default)]
+    pub remote_server_url: Option<String>,
+    /// Shared secret (Bearer token) authenticating requests to the remote
+    /// server. Optional but recommended even on a trusted tailnet.
+    #[serde(default)]
+    pub remote_server_token: Option<String>,
+    /// Address the `--serve` mode HTTP server binds to. Defaults to loopback
+    /// (safe); set to `0.0.0.0:8080` or a specific interface IP to expose it
+    /// over LAN/Tailscale.
+    #[serde(default = "default_remote_server_listen_addr")]
+    pub remote_server_listen_addr: String,
+}
+
+fn default_remote_server_listen_addr() -> String {
+    "127.0.0.1:8080".to_string()
 }
 
 fn default_model() -> String {
@@ -854,6 +889,10 @@ pub fn get_default_settings() -> AppSettings {
         extra_recording_buffer_ms: 0,
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
+        transcription_backend: TranscriptionBackend::default(),
+        remote_server_url: None,
+        remote_server_token: None,
+        remote_server_listen_addr: default_remote_server_listen_addr(),
     }
 }
 

@@ -1233,3 +1233,80 @@ pub async fn get_available_accelerators() -> crate::managers::transcription::Ava
         .await
         .expect("get_available_accelerators panicked")
 }
+
+// --- Remote transcription backend settings ---------------------------------
+
+/// Switch where speech-to-text inference runs: locally (a loaded model) or on a
+/// remote Handy `--serve` instance. Clears the cached remote client so the
+/// dedicated tokio runtime it owns is released when switching back to Local.
+#[tauri::command]
+#[specta::specta]
+pub fn change_transcription_backend_setting(
+    app: AppHandle,
+    backend: settings::TranscriptionBackend,
+) -> Result<(), String> {
+    let mut s = get_settings(&app);
+    s.transcription_backend = backend;
+    let tm = app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
+    tm.invalidate_remote_client();
+    settings::write_settings(&app, s);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_server_url_setting(app: AppHandle, url: Option<String>) -> Result<(), String> {
+    let mut s = get_settings(&app);
+    s.remote_server_url = url.filter(|u| !u.trim().is_empty());
+    let tm = app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
+    tm.invalidate_remote_client();
+    settings::write_settings(&app, s);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_server_token_setting(
+    app: AppHandle,
+    token: Option<String>,
+) -> Result<(), String> {
+    let mut s = get_settings(&app);
+    s.remote_server_token = token.filter(|t| !t.trim().is_empty());
+    let tm = app.state::<std::sync::Arc<crate::managers::transcription::TranscriptionManager>>();
+    tm.invalidate_remote_client();
+    settings::write_settings(&app, s);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_remote_server_listen_addr_setting(
+    app: AppHandle,
+    addr: String,
+) -> Result<(), String> {
+    let mut s = get_settings(&app);
+    s.remote_server_listen_addr = addr;
+    settings::write_settings(&app, s);
+    Ok(())
+}
+
+/// Probe a remote Handy server (`GET /health`) to verify connectivity + auth.
+/// Takes explicit url/token args so the settings UI can test in-flight values
+/// before saving them. Runs on the blocking pool because the client uses a
+/// dedicated tokio runtime with a blocking `reqwest` call.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_remote_server_connection(
+    url: String,
+    token: Option<String>,
+) -> Result<crate::server::ServerHealth, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("No server URL provided.".to_string());
+    }
+    let client = crate::server::RemoteClient::new(url, token.filter(|t| !t.trim().is_empty()));
+    tauri::async_runtime::spawn_blocking(move || client.health())
+        .await
+        .map_err(|e| format!("connection test failed: {e}"))?
+        .map_err(|e| e.to_string())
+}

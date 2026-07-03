@@ -13,6 +13,7 @@ mod llm_client;
 mod managers;
 mod overlay;
 pub mod portable;
+mod server;
 mod settings;
 mod shortcut;
 mod signal_handle;
@@ -521,6 +522,71 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     0
 }
 
+/// `--serve`-only settings overrides applied at server startup (not persisted
+/// beyond the server process): pin the model so the idle watcher never unloads
+/// it between requests, and honour the `HANDY_MODEL` / `HANDY_LANGUAGE` env vars
+/// so a systemd unit can configure the server over SSH without editing
+/// `settings_store.json`. Writes back to the store so the running managers pick
+/// the values up via `get_settings`.
+fn apply_serve_settings_overrides(app: &AppHandle) {
+    let mut s = get_settings(app);
+    // Never unload: the server must stay warm for the next request.
+    s.model_unload_timeout = settings::ModelUnloadTimeout::Never;
+    if let Ok(model) = std::env::var("HANDY_MODEL") {
+        if !model.trim().is_empty() {
+            log::info!("--serve: HANDY_MODEL override → '{}'", model);
+            s.selected_model = model;
+        }
+    }
+    if let Ok(language) = std::env::var("HANDY_LANGUAGE") {
+        if !language.trim().is_empty() {
+            log::info!("--serve: HANDY_LANGUAGE override → '{}'", language);
+            s.selected_language = language;
+        }
+    }
+    settings::write_settings(app, s);
+}
+
+/// Resolve the address the `--serve` HTTP server binds to. Precedence:
+/// `--serve-host` / `--serve-port` CLI flags, then the `HANDY_BIND` env var
+/// (`host:port`, convenient for a systemd unit), then the
+/// `remote_server_listen_addr` setting, then `127.0.0.1:8080`.
+/// `--serve-host` accepts either a bare host or `host:port`.
+fn resolve_serve_addr(app: &AppHandle, cli_args: &CliArgs) -> std::net::SocketAddr {
+    let s = get_settings(app);
+    let default: std::net::SocketAddr = s
+        .remote_server_listen_addr
+        .parse()
+        .unwrap_or_else(|_| ([127, 0, 0, 1], 8080).into());
+
+    // `--serve-host host:port` (or `HANDY_BIND=host:port`) wins outright.
+    let cli_raw = cli_args.serve_host.as_deref();
+    let env_raw = std::env::var("HANDY_BIND").ok();
+    if let Some(parsed) = cli_raw
+        .map(|r| r.parse::<std::net::SocketAddr>().ok())
+        .unwrap_or(None)
+        .or_else(|| env_raw.as_deref().and_then(|r| r.parse().ok()))
+    {
+        return parsed;
+    }
+
+    // Otherwise override host and port independently.
+    let default_host = default.ip().to_string();
+    let host_str = cli_raw.unwrap_or_else(|| env_raw.as_deref().unwrap_or(&default_host));
+    let port = cli_args.serve_port.unwrap_or(default.port());
+    match host_str.parse::<std::net::IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, port),
+        Err(_) => {
+            log::warn!(
+                "--serve: could not parse bind host '{}', falling back to {}",
+                host_str,
+                default
+            );
+            default
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_args: CliArgs) {
     // Detect portable mode before anything else
@@ -583,6 +649,11 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_transcribe_accelerator_setting,
             shortcut::change_ort_accelerator_setting,
             shortcut::change_transcribe_gpu_device,
+            shortcut::change_transcription_backend_setting,
+            shortcut::change_remote_server_url_setting,
+            shortcut::change_remote_server_token_setting,
+            shortcut::change_remote_server_listen_addr_setting,
+            shortcut::test_remote_server_connection,
             shortcut::get_available_accelerators,
             shortcut::handy_keys::start_handy_keys_recording,
             shortcut::handy_keys::stop_handy_keys_recording,
@@ -656,8 +727,16 @@ pub fn run(cli_args: CliArgs) {
 
     // The headless path must run as its own instance (see the single-instance
     // note below), not forward to an already-running app.
-    let headless_mode =
-        cli_args.transcribe_file.is_some() || cli_args.list_devices || cli_args.list_models;
+    let serve_mode = cli_args.serve;
+    let download_only = cli_args.download_model.is_some();
+    let headless_mode = cli_args.transcribe_file.is_some()
+        || cli_args.list_devices
+        || cli_args.list_models
+        || download_only;
+    // Both one-shot headless commands and the long-running --serve server run as
+    // standalone instances: they must not forward to (or be forwarded to) the GUI
+    // app via single-instance.
+    let skip_single_instance = headless_mode || serve_mode;
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -671,10 +750,11 @@ pub fn run(cli_args: CliArgs) {
                 .clear_targets()
                 .targets([
                     // Console output respects RUST_LOG environment variable. In
-                    // headless mode (--transcribe-file/--list-devices/--list-models)
+                    // headless mode (--transcribe-file/--list-devices/--list-models/--download-model)
                     // stdout carries only the result (JSON or plain), so send console
-                    // logs to stderr instead to keep stdout clean for CI parsing.
-                    Target::new(if headless_mode {
+                    // logs to stderr instead to keep stdout clean for CI parsing. The
+                    // long-running --serve server also logs to stderr for journald.
+                    Target::new(if skip_single_instance {
                         TargetKind::Stderr
                     } else {
                         TargetKind::Stdout
@@ -718,10 +798,11 @@ pub fn run(cli_args: CliArgs) {
 
     // Single-instance forwards CLI args to an already-running Handy and exits.
     // That would make the headless path
-    // (--transcribe-file/--list-devices/--list-models) a silent no-op whenever the
-    // app is already open, so skip it in headless mode and run a standalone
-    // instance instead.
-    if !headless_mode {
+    // (--transcribe-file/--list-devices/--list-models/--download-model) a silent
+    // no-op whenever the app is already open, and would prevent a second
+    // `--serve` from binding, so skip it there and run a standalone instance
+    // instead.
+    if !skip_single_instance {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == "--toggle-transcription") {
                 signal_handle::send_transcription_input(app, "transcribe", "CLI");
@@ -753,6 +834,72 @@ pub fn run(cli_args: CliArgs) {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            // `--serve` mode: a headless HTTP transcription server. Initializes
+            // the model + transcription managers (same as the one-shot headless
+            // path), pins the model so the idle watcher never unloads it between
+            // requests, preloads it in the background for a fast first request,
+            // then starts the axum router. Skips the window, tray, overlay,
+            // audio recorder, signal handlers and autostart. Designed to run
+            // under systemd on a GPU box reachable over LAN/Tailscale.
+            if serve_mode {
+                let app_handle = app.handle().clone();
+                let model_manager = Arc::new(
+                    ModelManager::new(&app_handle).expect("Failed to initialize model manager"),
+                );
+                let transcription_manager = Arc::new(
+                    TranscriptionManager::new(&app_handle, model_manager.clone())
+                        .expect("Failed to initialize transcription manager"),
+                );
+                app_handle.manage(model_manager.clone());
+                app_handle.manage(transcription_manager.clone());
+                managers::transcription::init_transcribe_backend();
+                managers::transcription::apply_accelerator_settings(&app_handle);
+
+                // Apply SSH-friendly overrides: pin the model (Never unload) so
+                // the server stays warm, and honor HANDY_MODEL / HANDY_LANGUAGE
+                // env vars so a systemd unit can configure the server without
+                // editing settings_store.json.
+                apply_serve_settings_overrides(&app_handle);
+
+                let addr = resolve_serve_addr(&app_handle, &cli_args);
+                let token = get_settings(&app_handle).remote_server_token;
+
+                // Preload the configured model in the background. The server
+                // answers /health as "loaded: false" until this completes, then
+                // "loaded: true"; /transcribe auto-loads on first call anyway.
+                let mm = model_manager.clone();
+                let tm = transcription_manager.clone();
+                let s = get_settings(&app_handle);
+                let model_id = s.selected_model.clone();
+                std::thread::spawn(move || {
+                    if model_id.is_empty() {
+                        log::warn!(
+                            "--serve: no model selected. Set HANDY_MODEL or selected_model."
+                        );
+                        return;
+                    }
+                    log::info!("--serve: preloading model '{}'", model_id);
+                    if !mm
+                        .get_model_info(&model_id)
+                        .is_some_and(|m| m.is_downloaded)
+                    {
+                        log::info!("--serve: model '{}' not present, downloading…", model_id);
+                        if let Err(e) = tauri::async_runtime::block_on(mm.download_model(&model_id))
+                        {
+                            log::error!("--serve: model download failed: {e}");
+                            return;
+                        }
+                    }
+                    if let Err(e) = tm.load_model(&model_id) {
+                        log::error!("--serve: model load failed: {e}");
+                    }
+                });
+
+                server::start_server(app_handle.clone(), addr, token);
+                log::info!("--serve: transcription server ready on http://{addr} (Ctrl+C to stop)");
+                return Ok(());
+            }
+
             // Headless one-shot path (`--transcribe-file` / `--list-devices` /
             // `--list-models`): initialize only what transcription needs — the
             // store/paths plugins, the model + transcription managers, and the
@@ -773,6 +920,24 @@ pub fn run(cli_args: CliArgs) {
                 app_handle.manage(transcription_manager);
                 managers::transcription::init_transcribe_backend();
                 managers::transcription::apply_accelerator_settings(&app_handle);
+
+                // `--download-model`: one-shot provisioning over SSH. Fetch the
+                // model (creating the cache entry) and exit — no transcription,
+                // no window. Progress is logged to stderr for journald.
+                if let Some(model_id) = cli_args.download_model.clone() {
+                    let mm = app_handle.state::<Arc<ModelManager>>().inner().clone();
+                    log::info!("--download-model: fetching '{}'", model_id);
+                    match tauri::async_runtime::block_on(mm.download_model(&model_id)) {
+                        Ok(()) => {
+                            println!("downloaded: {}", model_id);
+                            std::process::exit(0);
+                        }
+                        Err(e) => {
+                            eprintln!("error: download failed: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
 
                 let handle = app_handle.clone();
                 let args = cli_args.clone();
