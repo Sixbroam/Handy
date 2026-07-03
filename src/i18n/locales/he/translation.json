@@ -15,7 +15,8 @@
     "postProcessing": "עיבוד משלים",
     "history": "היסטוריה",
     "debug": "ניפוי שגיאות",
-    "about": "אודות"
+    "about": "אודות",
+    "transcriptionServer": "Transcription Server"
   },
   "onboarding": {
     "subtitle": "כדי להתחיל, בחר מודל תמלול",
@@ -563,6 +564,40 @@
       "whatsNewUpdates": {
         "label": "הצג מה חדש",
         "description": "הצג הערות גרסה לאחר עדכוני Handy"
+      }
+    },
+    "transcriptionServer": {
+      "title": "Transcription Server",
+      "backend": {
+        "label": "Inference backend",
+        "description": "Where speech-to-text runs: locally with a loaded model, or on a remote Handy server (--serve) over the network.",
+        "local": "Local (this device)",
+        "remote": "Remote server"
+      },
+      "serverUrl": {
+        "label": "Server URL",
+        "description": "Base URL of the remote Handy server, e.g. http://100.101.102.103:8080 (a Tailscale IP) or http://gpu-box:8080.",
+        "placeholder": "http://hostname:8080"
+      },
+      "token": {
+        "label": "Auth token",
+        "description": "Shared Bearer secret configured on the server. Optional but recommended even on a trusted tailnet.",
+        "placeholder": "leave blank if the server has no token"
+      },
+      "test": {
+        "button": "Test connection",
+        "testing": "Testing…",
+        "description": "Ping the server's /health endpoint to verify connectivity and authentication.",
+        "success": "Connected. Model: {{model}} (loaded: {{loaded}})"
+      },
+      "remoteNotice": "In Remote mode, no local model is used — this device captures audio and the server performs transcription. Configure the server's model and language on the server itself (--serve / HANDY_MODEL / HANDY_LANGUAGE).",
+      "serverMode": {
+        "title": "Run as server (--serve)",
+        "listenAddr": {
+          "label": "Listen address",
+          "description": "Address the --serve HTTP server binds to. Default 127.0.0.1:8080 (loopback only); use 0.0.0.0:8080 or a specific interface IP to expose it over LAN/Tailscale."
+        },
+        "setupHint": "Only applies when this machine runs Handy with --serve. Start the server from the command line, e.g. handy --serve --serve-host 0.0.0.0. See the deployment notes for the systemd unit."
       }
     }
   },
