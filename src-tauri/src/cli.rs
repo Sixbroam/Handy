@@ -60,4 +60,29 @@ pub struct CliArgs {
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Run as a headless transcription server: load the selected model and
+    /// expose it over HTTP for other Handy instances (set the other instance's
+    /// backend to Remote). Pair with --serve-host/--serve-port and the
+    /// `remote_server_*` settings. Designed to run under systemd on a
+    /// GPU box accessible over LAN/Tailscale.
+    #[arg(long)]
+    pub serve: bool,
+
+    /// Override the `remote_server_listen_addr` host for --serve (e.g. `0.0.0.0`
+    /// to expose on all interfaces, or a specific Tailscale IP). Port still
+    /// comes from --serve-port / the setting unless given here as `host:port`.
+    #[arg(long, value_name = "HOST | HOST:PORT")]
+    pub serve_host: Option<String>,
+
+    /// Override the `remote_server_listen_addr` port for --serve.
+    #[arg(long, value_name = "PORT")]
+    pub serve_port: Option<u16>,
+
+    /// Download a model headlessly and exit. Takes the same model id shown by
+    /// --list-models. Useful for provisioning a --serve box over SSH before the
+    /// first request (the server auto-downloads the selected model too, but this
+    /// lets you fetch it explicitly and inspect progress in the journal).
+    #[arg(long, value_name = "MODEL_ID")]
+    pub download_model: Option<String>,
 }

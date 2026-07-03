@@ -1,0 +1,79 @@
+# Handy transcription server (--serve mode)
+#
+# Runs Handy headlessly as an HTTP transcription server, exposing the
+# locally-loaded speech model to other Handy instances on the network (e.g. a
+# low-power laptop offloading inference to this GPU box over LAN/Tailscale).
+#
+# Install (over SSH):
+#   sudo install -d /usr/local/bin
+#   sudo cp handy /usr/local/bin/handy                       # or your build output
+#   sudo install -d /etc/systemd/system
+#   sudo cp packaging/handy-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#
+# Configure (drop-in, no edit to the unit file itself):
+#   sudo systemctl edit handy-server
+#   and paste, e.g.:
+#     [Service]
+#     Environment="HANDY_TOKEN=change-me-please"
+#     Environment="HANDY_BIND=0.0.0.0:8080"
+#     Environment="HANDY_MODEL=handy-computer/parakeet-unified-en-0.6b-gguf"
+#     Environment="HANDY_LANGUAGE=fr"
+#     Environment="RUST_LOG=info"
+#
+# Provision the model before first start (optional — the server auto-downloads
+# the configured model on first run):
+#   sudo -u handy /usr/local/bin/handy --list-models
+#   sudo -u handy /usr/local/bin/handy --download-model <model-id>
+#
+# Operate:
+#   sudo systemctl enable --now handy-server
+#   sudo systemctl status handy-server
+#   journalctl -u handy-server -f
+#
+# Security: by default the server binds to 127.0.0.1 (loopback). Set
+# HANDY_BIND=0.0.0.0:8080 (or a specific interface/Tailscale IP) to expose it,
+# and always set HANDY_TOKEN. Over Tailscale the WireGuard tunnel already
+# encrypts traffic and restricts access to your tailnet; the token is an extra
+# application-layer guard.
+
+[Unit]
+Description=Handy speech-to-text transcription server
+Documentation=https://github.com/cjpais/Handy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Dedicated unprivileged user. Create it with:
+#   sudo useradd -r -s /usr/sbin/nologin -d /var/lib/handy -m handy
+User=handy
+Group=handy
+
+# Binary + data dir. Handy stores settings/models under the handy user's XDG
+# dirs (~/.config, ~/.local/share), which live under /var/lib/handy — hence
+# ReadWritePaths below. To pin everything alongside the binary instead, drop a
+# `portable` marker file next to it (see portable.rs).
+ExecStart=/usr/local/bin/handy --serve
+
+# Server configuration (override via `systemctl edit handy-server`).
+# HANDY_BIND is host:port (e.g. 0.0.0.0:8080 to expose on all interfaces).
+Environment="HANDY_BIND=127.0.0.1:8080"
+Environment="RUST_LOG=info"
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/handy
+
+Restart=on-failure
+RestartSec=3
+
+# Give the model time to load on startup before considering it a failed start.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

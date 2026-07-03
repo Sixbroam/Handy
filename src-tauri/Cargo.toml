@@ -54,7 +54,10 @@ rubato = "0.16.2"
 hound = "3.5.1"
 log = "0.4.25"
 env_filter = "0.1.0"
-tokio = "1.43.0"
+# tokio features are additive over what Tauri already enables; we need
+# `rt-multi-thread` for the RemoteClient's dedicated runtime and `net` for the
+# `--serve` axum server's TcpListener.
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "net", "macros"] }
 vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
 enigo = "0.6.1"
 rodio = { git = "https://github.com/cjpais/rodio.git" }
@@ -84,6 +87,14 @@ tauri-plugin-dialog = "2.6"
 hf-hub = { git = "https://github.com/cjpais/hf-hub", branch = "cancellable-downloads", features = [
   "tokio",
 ] }
+# Remote transcription server mode (--serve): an axum HTTP server exposes the
+# loaded model to other Handy instances on the network (e.g. a low-power laptop
+# offloading inference to a GPU mini-PC). The client side reuses reqwest (below)
+# to POST audio. bytemuck casts the f32 audio buffer to/from raw LE bytes for the
+# wire protocol.
+axum = "0.7"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+bytemuck = "1.14"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
