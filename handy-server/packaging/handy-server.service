@@ -1,0 +1,30 @@
+[Unit]
+Description=Handy Transcription Server
+Documentation=https://github.com/Sixbroam/Handy/blob/main/handy-server/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ambroise
+Group=ambroise
+EnvironmentFile=/etc/handy-server/env
+ExecStart=/opt/handy-server/handy-server serve
+WorkingDirectory=/opt/handy-server
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/opt/handy-server /home/%h/.local/share/com.pais.handy
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=handy-server
+
+[Install]
+WantedBy=multi-user.target

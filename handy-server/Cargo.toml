@@ -1,0 +1,45 @@
+[package]
+name = "handy-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Standalone Handy transcription server — no Tauri/GTK dependencies"
+
+[[bin]]
+name = "handy-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytemuck = "1"
+reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json"] }
+dirs = "5"
+transcribe-rs = { version = "0.3.8", features = ["onnx"] }
+futures-util = "0.3"
+sha2 = "0.10"
+flate2 = "1.0"
+tar = "0.4"
+rand = "0.8"
+tower-http = { version = "0.5", features = ["trace"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+transcribe-cpp = { version = "0.1.0", default-features = false, features = [
+  "dynamic-backends",
+  "vulkan",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+transcribe-cpp = { version = "0.1.0", default-features = false, features = ["metal"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

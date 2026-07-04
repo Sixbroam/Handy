@@ -1,0 +1,69 @@
+name: Handy Server Build
+
+on:
+  push:
+    paths:
+      - "handy-server/**"
+  pull_request:
+    paths:
+      - "handy-server/**"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: handy-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            handy-server/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('handy-server/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Verify binary runs headless
+        run: |
+          unset DISPLAY WAYLAND_DISPLAY
+          ./target/release/handy-server --help
+          ./target/release/handy-server serve --help
+          ./target/release/handy-server models --help
+          ./target/release/handy-server selftest --help
+
+      - name: Package dist
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          chmod +x ../scripts/package.sh
+          bash ../scripts/package.sh --release
+          ls -la dist/
+
+      - name: Upload dist artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: handy-server-dist
+          path: handy-server/dist/
+          retention-days: 7
