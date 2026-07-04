@@ -66,12 +66,18 @@ jobs:
           $combined = if ($env:CMAKE_PREFIX_PATH) { "$prefix;$env:CMAKE_PREFIX_PATH" } else { $prefix }
           Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$combined"
 
-      - name: Patch tauri.conf.json (remove signCommand)
+      - name: Patch tauri.conf.json (no signing, no updater artifacts)
         shell: pwsh
         run: |
           $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json -Depth 99
+          # 1. Remove signCommand (no Azure Trusted Signing on this fork)
           $conf.bundle.windows.PSObject.Properties.Remove('signCommand')
+          # 2. Disable updater artifact creation (skips TAURI_SIGNING_PRIVATE_KEY
+          #    requirement). The updater config (pubkey + endpoints) stays valid
+          #    so the plugin parser succeeds, but the bundler won't try to sign.
+          $conf.bundle.createUpdaterArtifacts = $false
           $conf | ConvertTo-Json -Depth 99 | Set-Content src-tauri/tauri.conf.json
+          Write-Host "Patched: signCommand removed, createUpdaterArtifacts=false"
 
       - name: Install frontend dependencies
         run: bun install
