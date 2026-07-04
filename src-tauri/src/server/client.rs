@@ -21,15 +21,24 @@ pub struct RemoteClient {
 
 impl RemoteClient {
     pub fn new(url: String, token: Option<String>) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(180))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("failed to build remote-client tokio runtime");
+        // Create the reqwest client INSIDE the rt runtime context so its
+        // internal timer driver and connection pool are bound to rt, not
+        // the caller's runtime. Otherwise block_on() deadlocks: the HTTP
+        // request runs on rt but the connect_timeout timer is stuck on the
+        // blocked caller runtime, so timeouts never fire and the request
+        // hangs indefinitely.
+        let http = {
+            let _guard = rt.enter();
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(180))
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        };
         Self {
             url,
             token,
